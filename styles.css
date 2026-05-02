@@ -337,6 +337,14 @@ h3 {
   margin: 18px 0 10px;
 }
 
+.action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .transaction-list,
 .cart-list,
 .service-list {
@@ -933,6 +941,31 @@ h3 {
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.field-label input {
+  height: 52px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.field-label select {
+  height: 52px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.settings-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
 .success-box {

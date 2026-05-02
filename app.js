@@ -16,6 +16,10 @@ const state = {
   paymentMethod: "",
   cashAmount: 0,
   qrisRef: "QR-0001",
+  profilePanel: "",
+  profilePhone: "",
+  profileOutlet: "",
+  profilePin: "",
   isLoadingServices: false,
   bookingStep: 1,
   booking: {
@@ -167,6 +171,22 @@ async function cloudUpdateBooking(booking) {
   }
 }
 
+async function cloudUpdateAccount(account) {
+  if (!isCloudEnabled()) return;
+  try {
+    await cloudRequest(`accounts?id=eq.${account.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        phone: account.phone,
+        pin: account.pin,
+        outlet: account.outlet,
+      }),
+    });
+  } catch (error) {
+    showToast("warning", "Akun tersimpan lokal, belum tersinkron");
+  }
+}
+
 function loadAppData() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return;
@@ -291,14 +311,60 @@ function createAccount() {
 }
 
 function logout() {
+  const activeRole = roleLabel(state.role).toLowerCase();
   state.loggedIn = false;
   state.loginPin = "";
   state.currentUser = null;
   state.paymentOpen = false;
+  state.profilePanel = "";
+  state.profilePhone = "";
+  state.profileOutlet = "";
+  state.profilePin = "";
   state.cashierScreen = "dashboard";
   saveAppData();
   render();
-  showToast("info", "Sesi kasir ditutup");
+  showToast("info", `Sesi ${activeRole} ditutup`);
+}
+
+function openProfilePanel(panel) {
+  state.profilePanel = panel;
+  state.profilePhone = state.currentUser ? state.currentUser.phone : "";
+  state.profileOutlet = state.currentUser ? state.currentUser.outlet : "";
+  state.profilePin = "";
+  render();
+}
+
+function closeProfilePanel() {
+  state.profilePanel = "";
+  state.profilePhone = "";
+  state.profileOutlet = "";
+  state.profilePin = "";
+  render();
+}
+
+function saveCurrentUserProfile() {
+  if (!state.currentUser) return;
+  if (state.profilePhone.trim()) state.currentUser.phone = state.profilePhone.trim();
+  if (state.profileOutlet.trim()) state.currentUser.outlet = state.profileOutlet.trim();
+  const account = accounts.find((item) => item.id === state.currentUser.id);
+  if (account) Object.assign(account, state.currentUser);
+  saveAppData();
+  cloudUpdateAccount(state.currentUser);
+  closeProfilePanel();
+  showToast("success", "Pengaturan akun disimpan");
+}
+
+function saveCashierPin() {
+  if (!state.profilePin.trim()) {
+    showToast("error", "PIN baru wajib diisi");
+    return;
+  }
+  if (state.profilePin.trim().length < 4) {
+    showToast("error", "PIN minimal 4 digit");
+    return;
+  }
+  state.currentUser.pin = state.profilePin.trim();
+  saveCurrentUserProfile();
 }
 
 function showToast(type, message) {
@@ -355,6 +421,111 @@ function completePayment() {
   state.cashierScreen = "dashboard";
   saveAppData();
   render();
+}
+
+function refreshData() {
+  if (isCloudEnabled()) {
+    loadCloudData();
+    return;
+  }
+  render();
+  showToast("info", "Data lokal diperbarui");
+}
+
+function resetTransactions() {
+  const confirmed = window.confirm("Reset riwayat transaksi lokal di perangkat ini?");
+  if (!confirmed) return;
+  transactions = [];
+  state.cart = [];
+  state.paymentOpen = false;
+  state.paymentMethod = "";
+  state.cashAmount = 0;
+  saveAppData();
+  render();
+  showToast("success", "Riwayat transaksi direset");
+}
+
+function resetBookings() {
+  const confirmed = window.confirm("Reset semua booking lokal di perangkat ini?");
+  if (!confirmed) return;
+  cashierBookings = [];
+  saveAppData();
+  render();
+  showToast("success", "Riwayat booking direset");
+}
+
+function startBookingFlow() {
+  state.profilePanel = "newBooking";
+  state.booking = {
+    serviceId: 1,
+    barberId: "any",
+    dateIndex: 0,
+    slot: "10:30",
+    name: "",
+    phone: "",
+    success: false,
+  };
+  render();
+}
+
+function createCashierBooking() {
+  if (!state.booking.name.trim() || !state.booking.phone.trim()) {
+    showToast("error", "Nama dan nomor WA wajib diisi");
+    return;
+  }
+  const selectedService = services.find((item) => item.id === Number(state.booking.serviceId));
+  const selectedBarber = barbers.find((item) => item.id === state.booking.barberId);
+  const booking = {
+    id: Date.now(),
+    date: todayDate(),
+    time: state.booking.slot,
+    name: state.booking.name.trim(),
+    phone: state.booking.phone.trim(),
+    service: selectedService ? selectedService.name : "Potong Rambut",
+    barber: selectedBarber ? selectedBarber.name : "Bebas",
+    status: "Dikonfirmasi",
+    tone: "success",
+  };
+  cashierBookings.unshift(booking);
+  cloudInsert("cashier_bookings", booking);
+  saveAppData();
+  closeProfilePanel();
+  showToast("success", "Booking baru dibuat");
+}
+
+function addBookingToCalendar() {
+  const selectedService = services.find((item) => item.id === Number(state.booking.serviceId));
+  const selectedBarber = barbers.find((item) => item.id === state.booking.barberId);
+  const [hour, minute] = state.booking.slot.split(":").map(Number);
+  const start = new Date();
+  start.setDate(start.getDate() + Number(state.booking.dateIndex || 0));
+  start.setHours(hour, minute, 0, 0);
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const stamp = (date) => date.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  const title = `Booking YM-W HAIRCUT - ${selectedService ? selectedService.name : "Layanan"}`;
+  const description = `Barber: ${selectedBarber ? selectedBarber.name : "Bebas"}\\nPelanggan: ${state.booking.name || "-"}`;
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//YM-W HAIRCUT//Booking//ID",
+    "BEGIN:VEVENT",
+    `UID:${Date.now()}@ymw-haircut`,
+    `DTSTAMP:${stamp(new Date())}`,
+    `DTSTART:${stamp(start)}`,
+    `DTEND:${stamp(end)}`,
+    `SUMMARY:${title}`,
+    `DESCRIPTION:${description}`,
+    "LOCATION:YM-W HAIRCUT Cabang Utama",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\\r\\n");
+  const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "booking-ymw-haircut.ics";
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("success", "File kalender dibuat");
 }
 
 function simulateLoading() {
@@ -468,7 +639,10 @@ function cashierDashboard() {
       <section>
         <div class="section-head">
           <h2>Transaksi Terakhir</h2>
-          <button class="button secondary" onclick="showToast('info','Data diperbarui')">${icon("sync", 18)} Refresh</button>
+          <div class="action-row">
+            <button class="button secondary" onclick="refreshData()">${icon("sync", 18)} Refresh</button>
+            <button class="button danger" onclick="resetTransactions()">${icon("trash", 18)} Reset</button>
+          </div>
         </div>
         <div class="transaction-list">
           ${latest.map((item, index) => `
@@ -549,7 +723,7 @@ function cashierBookingsScreen() {
           <h1>Booking Hari Ini</h1>
           <p class="caption">Kelola jadwal pelanggan dan antrean barber</p>
         </div>
-        <button class="button primary" onclick="showToast('success','Slot booking baru dibuat')">${icon("plus", 18)} Booking Baru</button>
+        <button class="button primary" onclick="startBookingFlow()">${icon("plus", 18)} Booking Baru</button>
       </div>
 
       <section class="grid stats-grid">
@@ -561,7 +735,10 @@ function cashierBookingsScreen() {
       <section>
         <div class="section-head">
           <h2>Jadwal Berikutnya</h2>
-          <span class="badge warning">Mode Offline - antrean lokal</span>
+          <div class="action-row">
+            <span class="badge warning">Mode Offline - antrean lokal</span>
+            <button class="button danger" onclick="resetBookings()">${icon("trash", 18)} Reset</button>
+          </div>
         </div>
         <div class="transaction-list">
           ${cashierBookings.map(bookingRow).join("") || `<div class="empty-state card">${icon("calendar", 48)}<h3>Belum ada booking</h3><p class="caption">Booking pelanggan akan tampil di sini</p></div>`}
@@ -571,7 +748,7 @@ function cashierBookingsScreen() {
       <section class="card" style="padding:16px;margin-top:16px">
         <div class="section-head" style="margin-top:0">
           <h2>Kapasitas Barber</h2>
-          <button class="button secondary" onclick="showToast('info','Jadwal diperbarui')">${icon("sync", 18)} Sync</button>
+          <button class="button secondary" onclick="refreshData()">${icon("sync", 18)} Sync</button>
         </div>
         <div class="slot-grid">
           ${["Rio 4/6", "Dimas 3/6", "Bayu 2/5", "Bebas 5/8", "Walk-in 7", "Kosong 6"].map((slot, index) => `
@@ -620,7 +797,20 @@ function bookingRow(item) {
   `;
 }
 
-function profileRow(title, description, iconName, color) {
+function profileRow(key, title, description, iconName, color) {
+  if (color === undefined) {
+    color = iconName;
+    iconName = description;
+    description = title;
+    title = key;
+    key = {
+      "Printer Struk": "printer",
+      "Sinkronisasi": "sync",
+      "Nomor WhatsApp": "phone",
+      "Outlet": "outlet",
+      "PIN Kasir": "pin",
+    }[title] || "profile";
+  }
   return `
     <article class="transaction-row">
       <div style="display:flex;align-items:center;gap:12px">
@@ -630,8 +820,115 @@ function profileRow(title, description, iconName, color) {
           <p class="caption">${description}</p>
         </div>
       </div>
-      <button class="button secondary" onclick="showToast('info','${title}')">Detail</button>
+      <button class="button secondary" onclick="openProfilePanel('${key}')">Detail</button>
     </article>
+  `;
+}
+
+function profilePanel() {
+  const user = state.currentUser || accounts[0];
+  const panel = state.profilePanel;
+  const titles = {
+    printer: "Printer Struk",
+    sync: "Sinkronisasi",
+    phone: "Nomor WhatsApp",
+    outlet: "Outlet",
+    pin: "PIN Kasir",
+    newBooking: "Booking Baru",
+  };
+  return `
+    <div class="modal-backdrop" onclick="if(event.target===this) closeProfilePanel()">
+      <section class="payment-sheet settings-sheet">
+        <div class="payment-total">
+          <p class="caption">Pengaturan Kasir</p>
+          <strong>${titles[panel] || "Detail Akun"}</strong>
+        </div>
+        <div class="payment-body">
+          ${profilePanelBody(panel, user)}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function profilePanelBody(panel, user) {
+  if (panel === "newBooking") {
+    return `
+      <label class="field-label">Layanan
+        <select value="${state.booking.serviceId}" onchange="state.booking.serviceId=Number(this.value)">
+          ${services.filter((item) => item.type === "layanan").map((item) => `<option value="${item.id}" ${state.booking.serviceId === item.id ? "selected" : ""}>${item.name} - ${rupiah(item.price)}</option>`).join("")}
+        </select>
+      </label>
+      <label class="field-label">Barber
+        <select value="${state.booking.barberId}" onchange="state.booking.barberId=this.value">
+          ${barbers.map((barber) => `<option value="${barber.id}" ${state.booking.barberId === barber.id ? "selected" : ""}>${barber.name}</option>`).join("")}
+        </select>
+      </label>
+      <label class="field-label">Jam
+        <select value="${state.booking.slot}" onchange="state.booking.slot=this.value">
+          ${["09:00", "09:30", "10:30", "11:00", "13:00", "13:30", "15:00", "16:30", "17:00"].map((slot) => `<option value="${slot}" ${state.booking.slot === slot ? "selected" : ""}>${slot}</option>`).join("")}
+        </select>
+      </label>
+      <label class="field-label">Nama Pelanggan
+        <input value="${state.booking.name}" oninput="state.booking.name=this.value" />
+      </label>
+      <label class="field-label">Nomor WhatsApp
+        <input inputmode="tel" value="${state.booking.phone}" oninput="state.booking.phone=this.value" />
+      </label>
+      <button class="button primary full" onclick="createCashierBooking()">${icon("check", 18)} Simpan Booking</button>
+      <button class="button secondary full" onclick="closeProfilePanel()">Batal</button>
+    `;
+  }
+  if (panel === "printer") {
+    return `
+      <div class="settings-card">
+        <span class="icon-tile success">${icon("receipt", 24)}</span>
+        <div>
+          <h3>Printer siap dipakai</h3>
+          <p class="caption">Mode demo: struk akan memakai dialog cetak browser.</p>
+        </div>
+      </div>
+      <button class="button primary full" onclick="window.print()">${icon("receipt", 18)} Tes Cetak Struk</button>
+      <button class="button secondary full" onclick="closeProfilePanel()">Tutup</button>
+    `;
+  }
+  if (panel === "sync") {
+    return `
+      <div class="settings-card">
+        <span class="icon-tile warning">${icon("sync", 24)}</span>
+        <div>
+          <h3>${isCloudEnabled() ? "Supabase aktif" : "Belum tersambung Supabase"}</h3>
+          <p class="caption">${isCloudEnabled() ? "Data bisa ditarik ulang dari server." : "Isi URL dan anon key di config.js untuk sinkron online."}</p>
+        </div>
+      </div>
+      <button class="button primary full" onclick="loadCloudData();closeProfilePanel()">${icon("sync", 18)} Sinkronkan Sekarang</button>
+      <button class="button secondary full" onclick="closeProfilePanel()">Tutup</button>
+    `;
+  }
+  if (panel === "phone") {
+    return `
+      <label class="field-label">Nomor WhatsApp
+        <input inputmode="tel" value="${state.profilePhone || user.phone}" oninput="state.profilePhone=this.value" />
+      </label>
+      <button class="button primary full" onclick="saveCurrentUserProfile()">${icon("check", 18)} Simpan Nomor</button>
+      <button class="button secondary full" onclick="closeProfilePanel()">Batal</button>
+    `;
+  }
+  if (panel === "outlet") {
+    return `
+      <label class="field-label">Nama Outlet
+        <input value="${state.profileOutlet || user.outlet}" oninput="state.profileOutlet=this.value" />
+      </label>
+      <button class="button primary full" onclick="saveCurrentUserProfile()">${icon("check", 18)} Simpan Outlet</button>
+      <button class="button secondary full" onclick="closeProfilePanel()">Batal</button>
+    `;
+  }
+  return `
+    <label class="field-label">PIN Baru
+      <input type="password" inputmode="numeric" maxlength="6" placeholder="Minimal 4 digit" value="${state.profilePin}" oninput="state.profilePin=this.value" onkeydown="if(event.key==='Enter') saveCashierPin()" />
+    </label>
+    <button class="button primary full" onclick="saveCashierPin()">${icon("check", 18)} Simpan PIN</button>
+    <button class="button secondary full" onclick="closeProfilePanel()">Batal</button>
   `;
 }
 
@@ -901,7 +1198,13 @@ function adminDashboard() {
             </div>
           </article>
           <article class="card table-card">
-            <div class="section-head"><h2>Transaksi</h2><button class="button secondary">${icon("search", 18)} Filter</button></div>
+            <div class="section-head">
+              <h2>Transaksi</h2>
+              <div class="action-row">
+                <button class="button secondary" onclick="refreshData()">${icon("sync", 18)} Refresh</button>
+                <button class="button danger" onclick="resetTransactions()">${icon("trash", 18)} Reset</button>
+              </div>
+            </div>
             <table class="data-table">
               <thead><tr><th>Nama</th><th>Layanan</th><th>Total</th><th>Metode</th></tr></thead>
               <tbody>
@@ -1067,7 +1370,7 @@ function bookingSuccess() {
         <h1>Booking Berhasil</h1>
         <p class="caption">${selectedService.name} • ${state.booking.slot}</p>
       </div>
-      <button class="button secondary">${icon("calendar", 18)} Tambah ke Kalender</button>
+      <button class="button secondary" onclick="addBookingToCalendar()">${icon("calendar", 18)} Tambah ke Kalender</button>
       <button class="button primary full" onclick="state.booking={serviceId:1,barberId:'any',dateIndex:0,slot:'10:30',name:'',phone:'',success:false};state.bookingStep=1;render()">Booking Lagi</button>
     </section>
   `;
@@ -1084,7 +1387,7 @@ function render() {
     : state.role === "admin"
       ? adminDashboard()
       : customerBooking();
-  app.innerHTML = `<div class="app-shell">${topbar()}${content}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${content}${state.profilePanel ? profilePanel() : ""}</div>`;
 }
 
 loadAppData();
